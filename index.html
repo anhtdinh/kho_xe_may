@@ -18,9 +18,21 @@ body{padding-bottom:calc(32px + env(safe-area-inset-bottom,0px))}
 header{display:flex;align-items:center;justify-content:space-between;padding:calc(12px + env(safe-area-inset-top,0px)) 16px 12px;background:var(--pri);color:var(--pri-ink)}
 header h1{margin:0;font-size:19px;font-weight:700}
 header button{background:transparent;border:1px solid rgba(255,255,255,.5);color:#fff;border-radius:8px;padding:6px 12px;font-size:14px}
-.tabs{display:grid;grid-template-columns:1fr 1fr;background:var(--pri)}
+.tabs{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;background:var(--pri)}
 .tabs button{padding:13px 0;border:0;background:transparent;color:rgba(255,255,255,.75);font-size:16px;font-weight:600;border-bottom:4px solid transparent}
 .tabs button.on{color:#fff;border-bottom-color:#fff}
+.whoBar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 16px;background:#dfe9e6;font-size:14px}
+.whoBar span{word-break:break-all}
+.whoBar button{background:transparent;border:1px solid var(--pri);color:var(--pri);border-radius:8px;padding:5px 12px;font-size:14px;white-space:nowrap}
+#login{position:fixed;inset:0;z-index:40;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:20px}
+#login[hidden]{display:none}
+.loginCard{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:24px 20px;width:min(100%,380px);text-align:center}
+.loginCard h2{margin:0 0 6px;font-size:20px}
+.loginCard p{margin:0 0 16px;color:var(--mute);font-size:15px}
+#gbtn{display:flex;justify-content:center;min-height:44px}
+#loginErr{margin-top:14px;padding:10px 12px;border-radius:8px;background:var(--err-bg);color:var(--err);font-size:14px;text-align:left}
+#loginErr:empty{display:none}
+#loginSet{margin-top:16px;background:transparent;border:0;color:var(--pri);font-size:14px;text-decoration:underline}
 main{max-width:560px;margin:0 auto;padding:14px}
 .step{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:12px}
 .step.done{border-color:var(--pri)}
@@ -75,6 +87,11 @@ dialog p.hint{margin:0 0 6px;color:var(--mute);font-size:14px}
   <button id="tabIn" class="on">Nhập kho</button>
   <button id="tabOut">Xuất kho</button>
 </nav>
+
+<div class="whoBar" id="whoBar" hidden>
+  <span id="whoMail"></span>
+  <button id="btnLogout">Đăng xuất</button>
+</div>
 
 <main>
   <div id="msg" class="msg" role="status"></div>
@@ -138,6 +155,17 @@ dialog p.hint{margin:0 0 6px;color:var(--mute);font-size:14px}
   </div>
 </main>
 
+<!-- Đăng nhập -->
+<div id="login">
+  <div class="loginCard">
+    <h2>Đăng nhập</h2>
+    <p>Dùng tài khoản Google đã được cấp quyền.</p>
+    <div id="gbtn"></div>
+    <div id="loginErr"></div>
+    <button id="loginSet">Cài đặt</button>
+  </div>
+</div>
+
 <!-- Máy quét -->
 <div id="scanner" hidden>
   <div id="reader"></div>
@@ -153,10 +181,8 @@ dialog p.hint{margin:0 0 6px;color:var(--mute);font-size:14px}
   <p class="hint">Chỉ cần nhập một lần, lưu trên máy này.</p>
   <label class="lbl" for="cfgUrl">Link Web App (Apps Script)</label>
   <input type="text" id="cfgUrl" placeholder="https://script.google.com/macros/s/.../exec" autocomplete="off" style="width:100%">
-  <label class="lbl" for="cfgSecret">Mật khẩu app</label>
-  <input type="text" id="cfgSecret" autocomplete="off" style="width:100%">
-  <label class="lbl" for="cfgUser">Tên người thao tác</label>
-  <input type="text" id="cfgUser" autocomplete="off" style="width:100%">
+  <label class="lbl" for="cfgCid">Google Client ID</label>
+  <input type="text" id="cfgCid" placeholder="xxxx.apps.googleusercontent.com" autocomplete="off" style="width:100%">
   <div class="dlgrow">
     <button class="act alt" id="cfgTest">Thử kết nối</button>
     <button class="act" id="cfgSave">Lưu</button>
@@ -167,6 +193,7 @@ dialog p.hint{margin:0 0 6px;color:var(--mute);font-size:14px}
 <input type="file" id="file" accept="image/*" capture="environment" hidden>
 
 <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
 (function(){
   const $ = s => document.querySelector(s);
@@ -189,11 +216,88 @@ dialog p.hint{margin:0 0 6px;color:var(--mute);font-size:14px}
   async function api(payload){
     const url = store.get('url');
     if (!url) throw new Error('Chưa cài link Web App. Bấm Cài đặt để nhập.');
-    const body = JSON.stringify(Object.assign({}, payload, {secret: store.get('secret'), user: store.get('user')}));
+    if (payload.action !== 'ping' && !tokenValid()){
+      showLogin('Phiên đăng nhập đã hết hạn. Đăng nhập lại để tiếp tục, dữ liệu đang nhập vẫn được giữ.');
+      throw new Error('Cần đăng nhập lại');
+    }
+    const body = JSON.stringify(Object.assign({}, payload, {token: idToken}));
     // Không đặt Content-Type để trình duyệt gửi dạng text/plain (tránh preflight CORS)
     const r = await fetch(url, {method:'POST', body});
     const data = await r.json();
+    if (data && data.code === 'auth'){
+      idToken = ''; store.set('tok', '');
+      showLogin(data.error || 'Cần đăng nhập lại');
+    }
     return data;
+  }
+
+  /* ---------- đăng nhập Google ---------- */
+  let idToken = store.get('tok');
+  let me = null;
+
+  function parseJwt(t){
+    try{
+      const p = t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/');
+      return JSON.parse(decodeURIComponent(escape(atob(p))));
+    }catch(e){ return null; }
+  }
+  function tokenValid(){
+    if (!idToken) return false;
+    const p = parseJwt(idToken);
+    return !!(p && p.exp * 1000 > Date.now() + 60000);
+  }
+  function showLogin(err){
+    $('#login').hidden = false;
+    $('#loginErr').textContent = err || '';
+    $('#whoBar').hidden = true;
+    me = null;
+  }
+  function applyRole(){
+    $('#login').hidden = true;
+    $('#whoBar').hidden = false;
+    $('#whoMail').textContent = me.email;
+    $('#tabIn').hidden = !me.canIn;
+    $('#tabOut').hidden = !me.canOut;
+    if (mode === 'in' && !me.canIn) setMode('out');
+    else if (mode === 'out' && !me.canOut) setMode('in');
+    else setMode(mode);
+  }
+  async function verifyMe(){
+    $('#loginErr').textContent = '';
+    try{
+      const res = await api({action:'whoami'});
+      if (res.ok){ me = res; applyRole(); }
+      else if (res.code !== 'auth'){ showLogin(res.error || 'Lỗi không rõ'); }
+    }catch(err){
+      if (err.message !== 'Cần đăng nhập lại') showLogin('Không kết nối được: ' + err.message);
+    }
+  }
+  function onCred(resp){
+    idToken = resp.credential || '';
+    store.set('tok', idToken);
+    verifyMe();
+  }
+  function whenGoogle(cb){
+    let n = 0;
+    const t = setInterval(() => {
+      if (window.google && google.accounts && google.accounts.id){ clearInterval(t); cb(); }
+      else if (++n > 50){ clearInterval(t); showLogin('Không tải được Google Sign-In. Kiểm tra kết nối mạng rồi tải lại trang.'); }
+    }, 200);
+  }
+  function initAuth(){
+    const cid = store.get('cid');
+    if (!store.get('url') || !cid){ showLogin('Chưa nhập Link Web App hoặc Google Client ID. Bấm Cài đặt.'); return; }
+    whenGoogle(() => {
+      google.accounts.id.initialize({client_id: cid, callback: onCred, auto_select: true, cancel_on_tap_outside: false});
+      google.accounts.id.renderButton($('#gbtn'), {theme:'outline', size:'large', text:'signin_with', locale:'vi', width:260});
+      if (tokenValid()){ verifyMe(); }
+      else { showLogin(''); google.accounts.id.prompt(); }
+    });
+  }
+  function logout(){
+    try{ google.accounts.id.disableAutoSelect(); }catch(e){}
+    idToken = ''; store.set('tok', '');
+    showLogin('');
   }
 
   /* ---------- quét mã ---------- */
@@ -426,18 +530,18 @@ dialog p.hint{margin:0 0 6px;color:var(--mute);font-size:14px}
   const dlg = $('#settings');
   function openSettings(){
     $('#cfgUrl').value = store.get('url');
-    $('#cfgSecret').value = store.get('secret');
-    $('#cfgUser').value = store.get('user');
+    $('#cfgCid').value = store.get('cid');
     $('#cfgMsg').textContent = '';
     dlg.showModal();
   }
   function saveSettings(){
     store.set('url', norm($('#cfgUrl').value));
-    store.set('secret', norm($('#cfgSecret').value));
-    store.set('user', norm($('#cfgUser').value));
+    store.set('cid', norm($('#cfgCid').value));
   }
   $('#btnSettings').onclick = openSettings;
-  $('#cfgSave').onclick = () => { saveSettings(); dlg.close(); };
+  $('#cfgSave').onclick = () => { saveSettings(); dlg.close(); location.reload(); };
+  $('#loginSet').onclick = openSettings;
+  $('#btnLogout').onclick = logout;
   $('#cfgTest').onclick = async () => {
     saveSettings();
     $('#cfgMsg').textContent = 'Đang thử...';
@@ -452,7 +556,8 @@ dialog p.hint{margin:0 0 6px;color:var(--mute);font-size:14px}
   renderRecent();
   refreshIn();
   refreshOut();
-  if (!store.get('url')) openSettings();
+  initAuth();
+  if (!store.get('url') || !store.get('cid')) openSettings();
 })();
 </script>
 </body>
